@@ -164,47 +164,54 @@ def get_activities():
 def signup_for_activity(activity_name: str, email: str):
     """Sign up a student for an activity"""
     with get_connection() as conn:
-        activity = conn.execute(
-            "SELECT id, max_participants FROM activities WHERE name = ?",
-            (activity_name,),
-        ).fetchone()
-
-        if activity is None:
-            raise HTTPException(status_code=404, detail="Activity not found")
-
-        existing_enrollment = conn.execute(
-            """
-            SELECT 1
-            FROM enrollments
-            WHERE user_email = ? AND activity_id = ?
-            """,
-            (email, activity["id"]),
-        ).fetchone()
-        if existing_enrollment:
-            raise HTTPException(status_code=400, detail="Student is already signed up")
-
-        enrollment_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM enrollments WHERE activity_id = ?",
-            (activity["id"],),
-        ).fetchone()["count"]
-        if enrollment_count >= activity["max_participants"]:
-            raise HTTPException(status_code=400, detail="Activity is full")
-
-        conn.execute(
-            "INSERT OR IGNORE INTO users (email) VALUES (?)",
-            (email,),
-        )
         try:
-            conn.execute(
-                "INSERT INTO enrollments (user_email, activity_id) VALUES (?, ?)",
+            conn.execute("BEGIN IMMEDIATE")
+
+            activity = conn.execute(
+                "SELECT id, max_participants FROM activities WHERE name = ?",
+                (activity_name,),
+            ).fetchone()
+
+            if activity is None:
+                raise HTTPException(status_code=404, detail="Activity not found")
+
+            existing_enrollment = conn.execute(
+                """
+                SELECT 1
+                FROM enrollments
+                WHERE user_email = ? AND activity_id = ?
+                """,
                 (email, activity["id"]),
+            ).fetchone()
+            if existing_enrollment:
+                raise HTTPException(status_code=400, detail="Student is already signed up")
+
+            enrollment_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM enrollments WHERE activity_id = ?",
+                (activity["id"],),
+            ).fetchone()["count"]
+            if enrollment_count >= activity["max_participants"]:
+                raise HTTPException(status_code=400, detail="Activity is full")
+
+            conn.execute(
+                "INSERT OR IGNORE INTO users (email) VALUES (?)",
+                (email,),
             )
-        except sqlite3.IntegrityError as exc:
-            # This catches race conditions and enforces DB-level duplicate safety.
-            if "UNIQUE constraint failed" in str(exc):
-                raise HTTPException(status_code=400, detail="Student is already signed up") from exc
+            try:
+                conn.execute(
+                    "INSERT INTO enrollments (user_email, activity_id) VALUES (?, ?)",
+                    (email, activity["id"]),
+                )
+            except sqlite3.IntegrityError as exc:
+                # This catches race conditions and enforces DB-level duplicate safety.
+                if "UNIQUE constraint failed" in str(exc):
+                    raise HTTPException(status_code=400, detail="Student is already signed up") from exc
+                raise
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
             raise
-        conn.commit()
 
     return {"message": f"Signed up {email} for {activity_name}"}
 
