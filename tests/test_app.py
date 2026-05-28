@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,35 @@ class ActivitiesPersistenceTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertEqual(context.exception.detail, "Student is already signed up")
+
+    def test_enrollments_table_enforces_unique_user_activity_pair(self):
+        email = "db-constraint-test@mergington.edu"
+
+        with app_module.get_connection() as conn:
+            activity_id = conn.execute(
+                "SELECT id FROM activities WHERE name = ?",
+                ("Chess Club",),
+            ).fetchone()["id"]
+
+            conn.execute(
+                "INSERT OR IGNORE INTO users (email) VALUES (?)",
+                (email,),
+            )
+            conn.execute(
+                "INSERT INTO enrollments (user_email, activity_id) VALUES (?, ?)",
+                (email, activity_id),
+            )
+
+            with self.assertRaises(sqlite3.IntegrityError) as context:
+                conn.execute(
+                    "INSERT INTO enrollments (user_email, activity_id) VALUES (?, ?)",
+                    (email, activity_id),
+                )
+
+        self.assertIn(
+            "UNIQUE constraint failed: enrollments.user_email, enrollments.activity_id",
+            str(context.exception),
+        )
 
     def test_unregister_removes_enrollment_and_second_unregister_fails(self):
         email = "unit-test-unregister@mergington.edu"
